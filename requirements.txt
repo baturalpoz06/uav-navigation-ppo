@@ -1,5 +1,44 @@
-PyFlyt==0.29.0
+# ---------------------------------------------------------------------------
+# Environment for notebooks/02_ensemble_uncertainty.ipynb (Part 3).
+#
+# IMPORTANT: this file does NOT reproduce notebooks/01_ppo_training.ipynb.
+# The two parts were run under different PyFlyt releases, which changed the
+# flattened observation from 24-dim to 27-dim and renamed the wrapper
+# (FlattenWaypointObs -> FlattenWaypointEnv). Consequently
+# models/ppo_quadx_waypoints_1M.zip (obs=24) cannot be loaded in this
+# environment, while models/ensemble/*.zip (obs=27) can. See README §8.
+# ---------------------------------------------------------------------------
+
+# Core RL stack
 stable-baselines3==2.9.0
 gymnasium==1.3.0
-numpy==1.26.4
-torch>=2.0.0
+PyFlyt
+
+# NumPy must stay below 2.x: PyFlyt's compiled dependencies (PyBullet) are
+# built against the 1.x C ABI. Installing NumPy 2.x produces
+# "ValueError: numpy.dtype size changed" on import.
+numpy<2
+
+# Analysis: AUROC, average precision, precision-recall curves
+scikit-learn
+matplotlib
+
+# ---------------------------------------------------------------------------
+# Verified working environment (recorded in the saved model metadata):
+#   Python 3.12.13
+#   Stable-Baselines3 2.9.0
+#   PyTorch 2.11.0+cu128   (installed as an SB3 dependency)
+#   Gymnasium 1.3.0
+#   NumPy 1.26.4
+#   Cloudpickle 3.1.2
+#
+# PyFlyt is intentionally unpinned: the exact release used was whatever
+# `pip install PyFlyt` resolved to in July 2026, and Stable-Baselines3 does
+# not record third-party environment versions in its model metadata. To pin
+# it for your own runs, install once and read the version:
+#   pip show PyFlyt
+#
+# Training ran on CPU. For an MLP policy of this size CPU is faster than an
+# L4 GPU (207 vs 170 fps) because the PyBullet simulator, not the network,
+# is the bottleneck. Pass device="cpu" to PPO().
+# ---------------------------------------------------------------------------
