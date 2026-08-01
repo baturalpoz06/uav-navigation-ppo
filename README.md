@@ -678,11 +678,11 @@ range was not executed until the hypothesis was frozen.
 ├── notebooks/
 │   ├── 01_ppo_training.ipynb              # policy training + reward shaping study
 │   ├── 02_ensemble_uncertainty.ipynb      # drone ensemble, analysis, held-out test
-│   └── 03_lunarlander_replication.ipynb   # second environment, causal analysis
+│   └── 03_lunarlander_ensemble.ipynb      # second environment, causal analysis
 ├── models/
 │   ├── ppo_quadx_waypoints_1M.zip         # Part 1 policy (obs=24, legacy env)
 │   ├── ensemble/
-│   │   └── seed{1,2,3,4}.zip              # drone ensemble members (obs=27)
+│   │   └── ppo_quadx_waypoints_1M_seed{1,2,3,4}.zip  # drone ensemble (obs=27)
 │   └── lunarlander/
 │       └── ppo_lunarlander_seed{1..8}.zip # LunarLander ensemble members
 ├── figures/
