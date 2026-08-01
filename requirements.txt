@@ -1,30 +1,42 @@
 # ---------------------------------------------------------------------------
-# Environment for notebooks/02_ensemble_uncertainty.ipynb (Part 3).
+# Two incompatible environments are documented here. Install ONE of them,
+# depending on which notebook you intend to run.
 #
-# IMPORTANT: this file does NOT reproduce notebooks/01_ppo_training.ipynb.
-# The two parts were run under different PyFlyt releases, which changed the
+# Part 3 (notebooks/02_ensemble_uncertainty.ipynb) needs PyFlyt and is pinned
+# to NumPy 1.x. Part 4 (notebooks/03_lunarlander_ensemble.ipynb) needs Box2D
+# and has no NumPy constraint. Installing both in one environment works in
+# practice but is not tested.
+#
+# NOTE: this file does NOT reproduce notebooks/01_ppo_training.ipynb.
+# Part 1 and Part 3 ran under different PyFlyt releases, which changed the
 # flattened observation from 24-dim to 27-dim and renamed the wrapper
 # (FlattenWaypointObs -> FlattenWaypointEnv). Consequently
-# models/ppo_quadx_waypoints_1M.zip (obs=24) cannot be loaded in this
-# environment, while models/ensemble/*.zip (obs=27) can. See README §8.
+# models/ppo_quadx_waypoints_1M.zip (obs=24) cannot be loaded in the Part 3
+# environment, while models/ensemble/*.zip (obs=27) can. See README §9.
 # ---------------------------------------------------------------------------
 
-# Core RL stack
+# --- Shared across both parts ----------------------------------------------
 stable-baselines3==2.9.0
 gymnasium==1.3.0
-PyFlyt
-
-# NumPy must stay below 2.x: PyFlyt's compiled dependencies (PyBullet) are
-# built against the 1.x C ABI. Installing NumPy 2.x produces
-# "ValueError: numpy.dtype size changed" on import.
-numpy<2
-
-# Analysis: AUROC, average precision, precision-recall curves
 scikit-learn
 matplotlib
 
+# --- Part 3 only: drone ensemble (PyFlyt / PyBullet) -----------------------
+PyFlyt
+# NumPy must stay below 2.x for this part: PyFlyt's compiled dependencies
+# (PyBullet) are built against the 1.x C ABI. Installing NumPy 2.x produces
+# "ValueError: numpy.dtype size changed" on import.
+numpy<2
+
+# --- Part 4 only: LunarLander ensemble (Box2D) -----------------------------
+# Install with: pip install "gymnasium[box2d]"
+# Listed here for completeness; the extras marker is what pulls in box2d-py
+# and pygame, which are required for LunarLander-v3.
+box2d-py
+pygame
+
 # ---------------------------------------------------------------------------
-# Verified working environment (recorded in the saved model metadata):
+# Verified working environment — Part 3 (recorded in saved model metadata):
 #   Python 3.12.13
 #   Stable-Baselines3 2.9.0
 #   PyTorch 2.11.0+cu128   (installed as an SB3 dependency)
@@ -32,13 +44,19 @@ matplotlib
 #   NumPy 1.26.4
 #   Cloudpickle 3.1.2
 #
+# Verified working environment — Part 4:
+#   Python 3.12
+#   Stable-Baselines3 2.9.0
+#   Gymnasium (with box2d extra)
+#   NumPy unconstrained
+#
 # PyFlyt is intentionally unpinned: the exact release used was whatever
 # `pip install PyFlyt` resolved to in July 2026, and Stable-Baselines3 does
 # not record third-party environment versions in its model metadata. To pin
 # it for your own runs, install once and read the version:
 #   pip show PyFlyt
 #
-# Training ran on CPU. For an MLP policy of this size CPU is faster than an
-# L4 GPU (207 vs 170 fps) because the PyBullet simulator, not the network,
-# is the bottleneck. Pass device="cpu" to PPO().
+# Training ran on CPU in both parts. For an MLP policy of this size CPU is
+# faster than an L4 GPU (207 vs 170 fps in Part 3) because the simulator,
+# not the network, is the bottleneck. Pass device="cpu" to PPO().
 # ---------------------------------------------------------------------------
