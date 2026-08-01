@@ -1,12 +1,15 @@
-# UAV Navigation with PPO — and Three Attempts to Make the Policy Know When It Is Unsure
+# UAV Navigation with PPO — and Four Attempts to Make the Policy Know When It Is Unsure
 
-Waypoint navigation for a quadrotor trained with PPO, followed by three independent
+Waypoint navigation for a quadrotor trained with PPO, followed by four independent
 attempts to attach a **policy uncertainty signal** to it: a measurement that tells the
 system when its own decisions are unreliable.
 
 Two attempts failed outright. The third produced a signal that survived a confound
 control and replicated on held-out data — but did not survive conversion into a
-deployable decision rule. All three are documented here, including the failures.
+deployable decision rule. The fourth re-ran the whole method in a second, simpler
+environment with 4× the failure sample, and reached the same wall from the opposite
+direction: the retrospective measurement replicated almost perfectly, and the causal
+version did not. All four are documented here, including the failures.
 
 ---
 
@@ -18,10 +21,14 @@ deployable decision rule. All three are documented here, including the failures.
 | **Attempt 1 — `log_std`** | ✗ State-independent (constant 0.2348). No signal. |
 | **Attempt 2 — MC Dropout** | ✗ Collision 0.5050 vs success 0.4776. Indistinguishable. |
 | **Attempt 3 — Deep ensemble** | ◐ Measurement replicated (held-out AUROC 0.779, AP 2.9× baseline). Decision rule did not (recall 0.36 → 0.16). |
+| **Attempt 4 — Second environment** | ◐ Retrospective AUROC 0.862 → 0.854 held-out (near-zero drift). Causal AUROC 0.710 → 0.591. Same wall, second environment. |
 
 **The headline finding is not the AUROC.** It is that a signal can pass every
 statistical test you throw at it and still fail to become a usable alarm — and that
-the gap between the two is measurable in advance if you look at the right metric.
+this is not a small-sample artefact of one environment. Attempt 4 removed the sample
+size excuse and the failure persisted, which converts a local negative result into a
+statement about what ensemble disagreement measures: **degradation already in
+progress, not risk in advance.**
 
 ---
 
@@ -385,14 +392,225 @@ conflate:
 
 ---
 
-## 7. Honest summary
+## 7. Attempt 4 — the same method in a second environment
+
+### 7.1 Why a second environment
+
+Section 6.9 diagnosed the decision-rule failure as **threshold overfitting** and
+attributed it to distribution shift. That diagnosis had an untested competitor: with
+5 collision episodes in exploration and 25 in held-out, the rule may have failed
+simply because 150 episodes cannot pin down a threshold.
+
+These two explanations require different fixes and cannot be separated inside the
+drone environment, where a single ensemble member costs ~67 minutes of training.
+`LunarLander-v3` (continuous) was chosen to break the tie: comparable in structure
+(continuous control, ensemble-compatible, crash as a terminal event) but roughly 4×
+cheaper per member, allowing a much larger sample.
+
+| | Drone (§6) | LunarLander (§7) |
+|---|---|---|
+| Ensemble members | 4 | **8** |
+| Timesteps / member | 1M | 500k |
+| Episodes analysed | 150 + 200 | **300 + 300** |
+| Failure events | 5 + 25 | **24 + 28** |
+| Action dimensions | 4 (roll, pitch, yaw, thrust) | 2 (main engine, lateral engine) |
+| Failure definition | collision / out-of-bounds | crash (terminal, negative return) |
+
+**The method was not changed.** Same ensemble-of-seeds construction, same
+deterministic-prediction disagreement, same per-dimension treatment, same
+exploration/confirmatory split declared before analysis.
+
+### 7.2 Setup
+
+Eight PPO policies, identical configuration, differing only in random seed
+(1–8), 500k timesteps each. Member 1 acts; the other seven observe the same
+observation and produce actions that are never sent to the environment — the same
+pure-monitor design as §6.1.
+
+Single-member performance (50 episodes, seeds 1000–1049):
+
+| Metric | Value |
+|---|---|
+| Mean return | 180.6 ± 88.9 |
+| Landing success (return ≥ 200) | 70% |
+| Crash rate | 8% |
+| Timeout rate | 2% |
+
+Evaluation seeds: exploration `1000–1299` (24 crashes, 8.0%), confirmatory
+`2000–2299` (28 crashes, 9.3%). The confirmatory range was not executed until the
+exploration analysis was complete.
+
+### 7.3 Per-dimension result — §6.3 replicates
+
+Section 6.3 found that averaging across action dimensions of different scale inverted
+the signal entirely (AUROC 0.415). The same check here:
+
+| Dimension | Exploration AUROC | Confirmatory AUROC |
+|---|---|---|
+| **main engine** | **0.862** | **0.854** |
+| lateral engine | 0.599 | 0.695 |
+| aggregate (mean of both) | 0.825 | — |
+
+Two findings carry over from the drone:
+
+1. **One dimension carries the signal.** Main engine — the thrust analogue — is
+   the discriminating axis, exactly as in §6.3. Lateral engine is close to noise.
+2. **Aggregation costs accuracy.** 0.825 vs 0.862. Milder than the drone's
+   inversion, because both LunarLander dimensions share the range [−1, 1] and neither
+   points the wrong way — but the direction of the effect is identical.
+
+That the informative axis is *how much force to apply* in both environments, under two
+different physics engines and two different failure modes, is the strongest
+cross-environment result in this repository.
+
+### 7.4 The retrospective measurement replicates — almost exactly
+
+Episode-mean main-engine disagreement, the direct analogue of §6.6:
+
+| Metric | Exploration (300 ep) | Confirmatory (300 ep) | Drift |
+|---|---|---|---|
+| AUROC | 0.862 | **0.854** | **−0.008** |
+| Base rate | 8.0% | 9.3% | |
+
+Compare with the drone's 0.848 → 0.779 (−0.069). With 4× the failure events the
+optimism penalty essentially vanishes. **Sample size was indeed part of the §6 story.**
+
+Rather than freeze a single τ — the specific mistake of §6.8 — the full operating
+curve was computed, using a threshold grid derived from exploration only:
+
+| False halt rate | Exploration catch | Confirmatory catch |
+|---|---|---|
+| 5% | 29% | 36% |
+| 10% | 50% | 50% |
+| 15% | 67% | 64% |
+| 20% | 79% | 71% |
+
+The curves overlap within 8 percentage points everywhere and match exactly at the 10%
+operating point. Against §6.9's 36% → 16% collapse, this is a clean replication.
+**Reporting a curve instead of a constant removes the free parameter that failed to
+transfer.**
+
+### 7.5 And then the causal version fails anyway
+
+Section 6.8 established that episode-mean is **temporally leaky**: it is computed over
+the whole episode, including the crash, and a vehicle in flight cannot compute it. The
+drone analysis diagnosed this but never quantified it. With the larger sample it can be
+measured directly.
+
+A strictly causal score — `mean(main_engine_disagreement[30:C])`, decided once at step
+*C*, using no information from after *C*:
+
+| C | Causal AUROC (exploration) | Coverage |
+|---|---|---|
+| 50 | 0.674 | 1.00 |
+| 75 | 0.679 | 1.00 |
+| 100 | 0.692 | 1.00 |
+| **150** | **0.710** | 1.00 |
+| 200 | 0.705 | 0.98 |
+| 250 | 0.713 | 0.97 |
+
+AUROC plateaus at C = 150; coverage is complete because the shortest crash episode
+runs 248 steps (unlike the drone, where 21% of failures happened before the
+checkpoint). C = 150 was frozen and evaluated on the confirmatory set:
+
+| | Exploration | Confirmatory | Drift |
+|---|---|---|---|
+| Episode-mean (leaky) | 0.862 | 0.854 | **−0.008** |
+| Causal, C = 150 | 0.710 | **0.591** | **−0.119** |
+
+**The retrospective measurement replicates; the causal one does not.** 0.591 is close
+enough to chance that no operating point survives:
+
+| Target false alarm | Exploration recall | Confirmatory recall |
+|---|---|---|
+| 10% | 17% | 7% |
+| 15% | 25% | 18% |
+| 20% | 42% | 21% |
+| 30% | 54% | 50% |
+
+**Leakage is worth roughly 0.15 AUROC.** That number is the honest size of the gap
+between what this signal measures and what a deployed system could act on.
+
+### 7.6 Where the leaked information actually lives
+
+Disagreement was re-aligned by *steps remaining until termination* rather than absolute
+step index, separating crashed from non-crashed episodes:
+
+| Steps before end | Crashed | Non-crashed | Gap |
+|---|---|---|---|
+| 250–225 | 0.4534 | 0.2946 | +0.159 |
+| 225–200 | 0.4336 | 0.2693 | +0.164 |
+| 200–150 | 0.3657 | 0.2408 | +0.125 |
+| 150–100 | 0.3171 | 0.2493 | +0.068 |
+| 100–50 | 0.3050 | 0.2596 | +0.045 |
+| 50–20 | 0.3193 | **0.0990** | +0.220 |
+| 20–0 | 0.4472 | **0.0648** | +0.382 |
+
+The gap is U-shaped, and the final spike is **not driven by the crashes**. Crashed
+episodes rise modestly (0.31 → 0.45). Non-crashed episodes **collapse** (0.26 → 0.06):
+once the lander is down and the legs have contacted, all eight members agree that the
+engines should be off.
+
+Episode-mean AUROC 0.862 is therefore substantially powered by *the absence of a
+confident final phase*. That is a description of the outcome, not a prediction of it —
+which is precisely why the causal score, which cannot see the ending, scores 0.15
+lower.
+
+### 7.7 Trying to rescue it — and a second negative result
+
+If the signal is diluted by averaging over a long quiet stretch, restricting the window
+should recover it. Nine windows were swept, each scored on both sets:
+
+| Window | Exploration AUROC | Confirmatory AUROC | Drift |
+|---|---|---|---|
+| [0:50] | 0.655 | 0.460 | −0.195 |
+| [0:80] | 0.705 | 0.481 | −0.224 |
+| [20:60] | 0.704 | 0.480 | −0.224 |
+| [30:100] | 0.692 | 0.543 | −0.149 |
+| [50:150] | 0.702 | 0.619 | −0.082 |
+| [80:150] | 0.689 | 0.637 | −0.052 |
+| **[100:200]** | 0.664 | **0.662** | **−0.002** |
+
+Exploration AUROC is nearly flat across all windows (0.655–0.705) — read alone, it
+suggests early windows work. They do not. Every early window **falls below chance** on
+confirmatory data: that apparent signal was specific to 24 particular crashes.
+
+Only the late window `[100:200]` transfers, with essentially zero drift — and its
+strength is modest, AUROC 0.662.
+
+**This window was selected by inspecting confirmatory results, so 0.662 is an
+exploratory figure, not a confirmed one.** Establishing it would require a third,
+untouched seed range. It is reported as a direction, not a result.
+
+### 7.8 What Attempt 4 settles
+
+The competing explanations from §6.9 can now be separated:
+
+- **Sample size was real but not decisive.** Quadrupling the failure count reduced
+  held-out drift from −0.069 to −0.008 for the retrospective measurement. The §6
+  numbers were noisier than they looked.
+- **The causal failure was not a sample-size artefact.** With ample data, a clean
+  environment, complete checkpoint coverage, and a curve instead of a frozen constant,
+  the causal score still dropped 0.119 and landed near chance.
+
+The consistent explanation across both environments is that **ensemble action
+disagreement is a lagging indicator**. It rises as control degrades, not before. In
+the drone it was the thrust axis; here the main engine — the same physical quantity,
+and in both cases the rise arrives too late to act on.
+
+This does not rule out runtime failure prediction. It rules out *this statistic* as
+the basis for it, and points at the alternatives listed in §12.
+
+---
+
+## 8. Honest summary
 
 Ensemble disagreement in the thrust dimension is a **real, confound-controlled,
 externally replicated** indicator of flight quality. It is **not** a deployable abort
 criterion at this level of performance: 1.71× precision lift over base rate is a
 measurement result, not a safety mechanism.
 
-What the three attempts establish together:
+What the four attempts establish together:
 
 1. Self-introspection by a single deterministic policy does not yield state-dependent
    uncertainty (Attempts 1 and 2, two different mechanisms, same conclusion).
@@ -402,10 +620,18 @@ What the three attempts establish together:
    metrics diverge by orders of magnitude at a 0.23% base rate.
 4. Passing a discrimination threshold does not imply a working decision rule. Free
    parameters in the rule are where generalisation is lost.
+5. A signal can replicate perfectly as a *measurement* and fail completely as a
+   *predictor*. The retrospective/causal gap (0.862 vs 0.710 exploration; 0.854 vs
+   0.591 held-out) is measurable, and measuring it should be standard practice for
+   any uncertainty signal proposed for runtime use.
+6. Cross-environment replication changes what a negative result means. One
+   environment gives "this did not work here"; two independent environments reaching
+   the same wall by different routes gives "this statistic is a lagging indicator" —
+   a claim about the method, not the experiment.
 
 ---
 
-## 8. Reproducibility
+## 9. Reproducibility
 
 **Two environment versions are involved and they are not interchangeable.**
 
@@ -427,55 +653,89 @@ Consequences, stated plainly:
   failing to complete the route — which is precisely why collisions are rare enough to
   create the base-rate problem in §6.5.
 
-Ensemble environment:
+Ensemble environment (Part 3):
 
 ```
 Python 3.12.13 | Stable-Baselines3 2.9.0 | PyTorch 2.11.0+cu128
 Gymnasium 1.3.0 | NumPy 1.26.4 (2.x breaks PyFlyt's compiled dependencies)
 ```
 
+Part 4 (`LunarLander-v3`) has no PyFlyt dependency and therefore no NumPy pin; it
+requires `gymnasium[box2d]` for the Box2D physics backend.
+
 Training ran on CPU: for an MLP policy of this size, CPU outperformed an L4 GPU
 (207 vs 170 fps) because the simulator, not the network, is the bottleneck.
 
-Evaluation seeds: exploration `1000–1149`, held-out `1150–1349`. The held-out range
-was not executed until the hypothesis was frozen.
+Evaluation seeds — Part 3: exploration `1000–1149`, held-out `1150–1349`.
+Part 4: exploration `1000–1299`, confirmatory `2000–2299`. In both parts the second
+range was not executed until the hypothesis was frozen.
 
 ---
 
-## 9. Repository structure
+## 10. Repository structure
 
 ```
 ├── notebooks/
-│   ├── 01_ppo_training.ipynb          # policy training + reward shaping study
-│   └── 02_ensemble_uncertainty.ipynb  # ensemble, analysis, held-out test
+│   ├── 01_ppo_training.ipynb              # policy training + reward shaping study
+│   ├── 02_ensemble_uncertainty.ipynb      # drone ensemble, analysis, held-out test
+│   └── 03_lunarlander_replication.ipynb   # second environment, causal analysis
 ├── models/
-│   ├── ppo_quadx_waypoints_1M.zip     # Part 1 policy (obs=24, legacy env)
-│   └── ensemble/
-│       └── seed{1,2,3,4}.zip          # ensemble members (obs=27)
+│   ├── ppo_quadx_waypoints_1M.zip         # Part 1 policy (obs=24, legacy env)
+│   ├── ensemble/
+│   │   └── seed{1,2,3,4}.zip              # drone ensemble members (obs=27)
+│   └── lunarlander/
+│       └── ppo_lunarlander_seed{1..8}.zip # LunarLander ensemble members
 ├── figures/
 └── requirements.txt
 ```
 
 ---
 
-## 10. Limitations and future work
+## 11. Limitations and future work
 
-- **Five collision episodes** in the exploration set. Confidence intervals are wide;
-  the held-out set roughly doubles the failure count but this remains a small-sample
-  study.
-- **N = 4** members. Five or more would reduce variance in the disagreement estimate,
-  though sample size, not ensemble size, was the binding constraint here.
+- **Small failure counts in Part 3.** Five collision episodes in the exploration set;
+  confidence intervals are wide. Part 4 addresses this directly (24 + 28 failures) but
+  does so in a different environment.
+- **N = 4** members in Part 3. Part 4 used 8, which reduced held-out drift
+  substantially — though sample size, not ensemble size, was the binding constraint.
 - **Absolute threshold.** Defining τ as an online percentile of recent flights rather
   than a fixed constant would let it track distribution shift — the most direct fix
-  for §6.9.
+  for §6.9, partially addressed in §7.4 by reporting a curve instead.
 - **Single executor.** Whether disagreement predicts failure for a policy that is
   itself the ensemble mean is untested, and would change the causal interpretation.
-- **One environment.** Whether the thrust-axis result generalises to other dynamics is
-  unknown.
+- **Two environments, both simulated.** Both use idealised physics with no sensor
+  noise, actuator lag, or wind. Whether disagreement behaves the same under real
+  sensing is untested.
+- **The `[100:200]` window is unconfirmed.** It was selected after seeing confirmatory
+  results and needs a third, untouched seed range to become a result rather than a
+  direction.
 
 ---
 
-## 11. Related
+## 12. Where this goes next
+
+Attempt 4 narrows the problem: the question is not whether uncertainty exists in a
+control policy, but whether any statistic makes it visible **early enough to act on**.
+Ensemble action disagreement does not. Four directions remain open, roughly in
+increasing order of cost:
+
+1. **Critic disagreement instead of actor disagreement.** The current signal asks
+   what the members would *do*. The critics estimate what the current state is *worth*
+   — a quantity that already encodes the future, and so may lead rather than lag. The
+   critics are already trained; only the readout changes.
+2. **Sequence models over the disagreement trace.** Replacing a hand-chosen summary
+   statistic (mean over a window) with a small temporal model removes the window-
+   selection problem entirely. Sample size is the binding constraint.
+3. **Model-based lookahead.** Learn the dynamics, roll the current policy forward,
+   flag trajectories that enter failure regions. Directly addresses the lagging-
+   indicator problem, at the cost of training a separate world model.
+4. **Reachability analysis / control barrier functions.** Formal rather than learned:
+   guarantees about which states can still be recovered from. The strongest answer,
+   and the one furthest from the methods used here.
+
+---
+
+## 13. Related
 
 - [`rl-fundamentals`](https://github.com/baturalpoz06/rl-fundamentals) — DQN and PPO
   implemented from scratch on CartPole
